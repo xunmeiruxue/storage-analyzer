@@ -33,10 +33,12 @@ Windows 磁盘空间分析 + 交互式一键清理报告。
 ```powershell
 cd <仓库目录>
 python scripts\detect_tools.py --json
-python scripts\scan.py --full --elevate --profiles 10 --drill 3 --out "%TEMP%\storage_scan.json"
-python scripts\server.py %TEMP%\storage_analysis.json
+python scripts\scan.py --full --elevate --profiles 10 --drill 3 --session
+python scripts\server.py --session %TEMP%\storage-analyzer\<会话目录>
 ```
 
+`--session` 会自动在 `%TEMP%\storage-analyzer\<时间>-<pid>\` 建一个会话目录，
+扫描结果、分析结果、提权中间文件全放里面，最后一起删。
 ### B. 在 WSL 里操作 Windows
 
 WSL 里**不要**用 WSL 自己的 Python 去遍历 `/mnt/c`（9p 文件系统慢 5–10 倍，而且读不到
@@ -108,6 +110,27 @@ storage-analyzer/
 
 ---
 
+## 临时文件
+
+所有产物都在一个会话目录里：`%TEMP%\storage-analyzer\<时间>-<pid>\`
+
+| 文件 | 说明 |
+|---|---|
+| `.session` | 标记文件，服务端只删带它的目录 |
+| `scan.json` | 扫描结果 |
+| `analysis.json` | 分析结果 |
+| `storage_scan_admin_*.json` / `*.ps1` | 提权中间文件 |
+
+**怎么清**：
+
+1. 页面右下角「🧹 结束并清理临时文件」——停服务并删掉整个会话目录；
+2. 「■ 结束服务」只停服务，文件留着（想留档比对时用）；
+3. 忘了点也没关系：`scan.py --session` 下次启动会清掉 7 天前的旧会话；
+4. 手动删：整个 `%TEMP%\storage-analyzer\` 都能删。
+
+清理只针对带 `.session` 标记、且位于该临时根下的目录，不会碰你的任何文件。
+
+---
 ## 常见问题
 
 **Q：报 `SHFileOperation failed (code 124 / 0x7C)`？**

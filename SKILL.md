@@ -457,11 +457,16 @@ GET  /progress?id=xxx&token=... →
 - 前端：全成功 → 打勾；部分成功 → `⚠ 已处理 12 项，1 项失败` + **「跳过失败项，继续」**
 - `code 124 / DE_INVALIDFILES` 基本都是**文件被进程占用**，错误文案要直接写出进程名
 
-### 6.7 结束服务
+### 6.7 结束服务（两个按钮）
 
-右下角固定 `■ 结束服务` → `POST /shutdown` → `srv.shutdown()` → 页面提示"服务已结束"，
-按钮全部置灰。没有这个按钮，用户只能去任务管理器杀 `python.exe`。
+右下角固定两个按钮：
 
+| 按钮 | 行为 |
+|---|---|
+| **■ 结束服务** | 只停掉服务进程，临时文件保留 |
+| **🧹 结束并清理临时文件** | 停服务 + 删除整个会话目录 |
+
+两个都要有：想留档比对的人需要前者，只想干净收尾的人需要后者。
 ### 6.8 网页实现骨架
 
 | 方法 | 路径 | 请求 | 响应 |
@@ -486,20 +491,37 @@ GET  /progress?id=xxx&token=... →
 按前缀拒绝 `C:\Windows`、`Program Files`；按精确拒绝 `C:\Users`、`C:\ProgramData`。
 **第一层目录（`D:\Downloads`）必须放行**，否则数据盘的清理目标全被误杀。
 
-### 6.9 临时文件
+### 6.9 临时文件：一个会话一个目录，结束时可一键清理
 
-服务本身不写盘（`sys.dont_write_bytecode = True`，无 `__pycache__`）。会留下的是：
+**这个 skill 会写盘**，所以必须管住。所有产物都收进同一个会话目录：
 
-| 产物 | 位置 |
-|---|---|
-| 扫描 JSON / 分析 JSON | `%TEMP%\storage_scan.json` 等 |
-| 提权重扫的临时输出 | `%TEMP%\storage_scan_admin_*.json` |
-| **回收站里的文件** | `C:\\$Recycle.Bin` |
+    %TEMP%\storage-analyzer\<日期>-<pid>\
+    ├── .session                      # 标记文件：服务端只删带它的目录
+    ├── scan.json                     # 扫描结果（几十 MB）
+    ├── analysis.json                 # 分析结果
+    └── storage_scan_admin_*.json/ps1 # 提权时的中间文件
 
-必须告诉用户：**"移到回收站"不会立刻释放空间，要清空回收站才真正腾出来。**
+**启动方式**：
+
+    python scripts/scan.py --full --session          # 自动建会话目录，输出到 <session>\scan.json
+    python scripts/server.py --session <目录>         # 从 <目录>\analysis.json 读，结束时按需清理
+
+**清理的三道保险**：
+
+1. 页面按钮「🧹 结束并清理临时文件」——立即删除整个会话目录；
+2. scan.py --session 每次启动会自动清掉超过 --keep-days（默认 7 天）的旧会话；
+3. 手动删：整个 %TEMP%\storage-analyzer\ 目录都可以删，里面只有分析产物。
+
+**安全边界**：_cleanup_session() 只删同时满足两个条件的目录——带 .session 标记、
+且位于 %TEMP%\storage-analyzer\ 之下。用户自己的文件夹、其他临时目录一律不碰。
+
+**注意**：Ctrl+C 停服务**不会**自动删目录（除非启动时加 --cleanup）。
+想留档就用 Ctrl+C 或「结束服务」；想干净就用「结束并清理」。
+
+> 一定要在对话里告诉用户这句话：**“临时文件都在 %TEMP%\storage-analyzer\，
+> 点右下角『结束并清理』会一起删掉；忘了删也不会超过 7 天。”**
 
 ---
-
 ## 7. 长期优化建议怎么写
 
 `summary.long_term` 支持字符串或对象数组。**对象形式更清楚**：

@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 HOME = os.path.expanduser("~")
@@ -580,6 +581,42 @@ def _pick_drives():
     return picked or None
 
 
+SESSION = None
+
+
+def _session_setup():
+    """把所有产物收进一个会话目录，方便最后一次性删除。
+
+    --session   自动在 %TEMP%\storage-analyzer\<时间>-<pid>\ 建目录
+    --workdir D 指定目录
+    同时清理超过 --keep-days 天（默认 7）的旧会话，防止越积越多。
+    """
+    base = os.path.join(tempfile.gettempdir(), "storage-analyzer")
+    explicit = None
+    for i, a in enumerate(sys.argv):
+        if a == "--workdir" and i + 1 < len(sys.argv):
+            explicit = sys.argv[i + 1]
+    if "--session" not in sys.argv and not explicit:
+        return None
+    try:
+        os.makedirs(base, exist_ok=True)
+        keep_days = _arg("--keep-days", 7)
+        now = time.time()
+        for name in os.listdir(base):
+            p = os.path.join(base, name)
+            if os.path.isdir(p) and now - os.path.getmtime(p) > keep_days * 86400:
+                shutil.rmtree(p, ignore_errors=True)
+    except OSError:
+        pass
+    d = explicit or os.path.join(base, time.strftime("%Y%m%d-%H%M%S") + "-" + str(os.getpid()))
+    os.makedirs(d, exist_ok=True)
+    marker = os.path.join(d, ".session")
+    if not os.path.exists(marker):
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"tool": "storage-analyzer",
+                                  "created": time.strftime("%Y-%m-%d %H:%M:%S")}))
+    return d
+
 def _ps_quote(a):
     return "\"" + str(a).replace("\"", "\\\"") + "\""
 
@@ -592,7 +629,7 @@ def _relaunch_elevated():
     """
     import subprocess
     import tempfile
-    tmp = tempfile.gettempdir()
+    tmp = SESSION or tempfile.gettempdir()
     out = os.path.join(tmp, "storage_scan_admin_%d.json" % os.getpid())
     args = [a for a in sys.argv[1:] if a != "--elevate"] + ["--out", out]
     ps1 = os.path.join(tmp, "storage_scan_elev_%d.ps1" % os.getpid())
@@ -621,6 +658,10 @@ def _relaunch_elevated():
     return 0
 
 def main():
+    global SESSION
+    SESSION = _session_setup()
+    if SESSION:
+        print("[session] " + SESSION, file=sys.stderr)
     if "--elevate" in sys.argv and sys.platform.startswith("win") and not is_admin():
         sys.exit(_relaunch_elevated())
     started = time.time()
@@ -663,6 +704,8 @@ def main():
     for i, a in enumerate(sys.argv):
         if a == "--out" and i + 1 < len(sys.argv):
             outfile = sys.argv[i + 1]
+    if not outfile and SESSION:
+        outfile = os.path.join(SESSION, "scan.json")
     if outfile:
         with open(outfile, "w", encoding="utf-8") as f:
             f.write(out)

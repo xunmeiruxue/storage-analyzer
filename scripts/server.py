@@ -31,6 +31,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -45,6 +46,7 @@ HOME = os.path.realpath(os.path.expanduser("~"))
 TOKEN = secrets.token_urlsafe(24)
 JOBS = {}          # job_id -> 进度状态（内存里，服务停了就没了）
 SRV = None
+SESSION_DIR = None
 DATA = {}
 TPL = ""
 RM_ALLOW = set()
@@ -408,8 +410,9 @@ class Handler(BaseHTTPRequestHandler):
             if req.get("token") != TOKEN:
                 self._send(403, json.dumps({"ok": False, "error": "bad token"}))
                 return
-            self._send(200, json.dumps({"ok": True, "stopping": True}))
-            threading.Thread(target=_stop_server, daemon=True).start()
+            cleanup = bool(req.get("cleanup"))
+            self._send(200, json.dumps({"ok": True, "stopping": True, "cleanup": cleanup}))
+            threading.Thread(target=_stop_server, args=(cleanup,), daemon=True).start()
             return
 
         if self.path == "/preview":
@@ -526,8 +529,29 @@ def _run_job(job_id, paths, mode, stop_on_error):
         job["result"]["error"] = failed[0]["error"]
     threading.Timer(3600, lambda: JOBS.pop(job_id, None)).start()
 
-def _stop_server():
+def _cleanup_session():
+    """只删带 .session 标记的会话目录，绝不碰用户自己的文件夹。"""
+    d = SESSION_DIR
+    if not d or not os.path.isdir(d):
+        return False
+    if not os.path.exists(os.path.join(d, ".session")):
+        return False
+    base = os.path.realpath(os.path.join(tempfile.gettempdir(), "storage-analyzer"))
+    real = os.path.realpath(d)
+    if not (real == base or real.startswith(base + os.sep)):
+        return False
+    try:
+        shutil.rmtree(real, ignore_errors=True)
+        return True
+    except Exception:
+        return False
+
+def _stop_server(cleanup=False):
+    # 先清理再停服务：serve_forever 返回后主线程会立刻退出，
+    # 此时 daemon 线程可能来不及删完，所以顺序不能反。
     time.sleep(0.4)
+    if cleanup:
+        _cleanup_session()
     if SRV is not None:
         SRV.shutdown()
 
@@ -536,8 +560,25 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
+    global SESSION_DIR
+    for i, a in enumerate(sys.argv):
+        if a in ("--session", "--workdir") and i + 1 < len(sys.argv):
+            SESSION_DIR = sys.argv[i + 1]
+    if SESSION_DIR is None and "--session" in sys.argv:
+        base = os.path.join(tempfile.gettempdir(), "storage-analyzer")
+        try:
+            cands = [os.path.join(base, n) for n in os.listdir(base)
+                     if os.path.isdir(os.path.join(base, n))]
+            if cands:
+                SESSION_DIR = max(cands, key=os.path.getmtime)
+        except OSError:
+            pass
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    src = args[0]
+    if SESSION_DIR:
+        cand = os.path.join(SESSION_DIR, "analysis.json")
+        src = cand if os.path.exists(cand) else (args[0] if args else cand)
+    else:
+        src = args[0]
     port = 0
     no_browser = "--no-browser" in sys.argv
     for i, a in enumerate(sys.argv):
