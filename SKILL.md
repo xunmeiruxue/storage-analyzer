@@ -66,7 +66,7 @@ description: >
 python scripts/detect_tools.py --json
 
 # 1) 扫描。建议第一次就带 --elevate，让用户点一次 UAC，后面不再为权限发愁
-python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan.json"
+python scripts/scan.py --full --elevate --profiles 10 --drill 3 --out "%TEMP%\storage_scan.json"
 
 #    只扫系统盘（默认） / 指定盘 / 全部盘
 python scripts/scan.py --full
@@ -82,6 +82,38 @@ python scripts/server.py %TEMP%\storage_analysis.json
 ```
 
 交付：报告地址 + 可释放估算 + 最该清的 2–3 项 + 风险最高的一项 + "看完点右下角结束服务"。
+
+---
+
+### 2.1 先看懂 scan.py 的输出（别猜结构）
+
+```json
+{
+  "generated_at": "...",
+  "system": {
+    "disks": [ ... ],
+    "full_scans": [ { ... } ],   // 盘级扫描结果，--drive / --all-drives 在这里生效
+    "full_scan":  { ... }        // full_scans[0] 的别名，兼容旧调用
+  },
+  "groups": { ... },             // 只是"当前用户目录速览"，固定取 USERPROFILE，跟 --drive 无关
+  "schema": { ... },             // 每个数组的字段顺序，先读它
+  "scan_seconds": 12.3
+}
+```
+
+| 你要的东西 | 在哪 |
+|---|---|
+| 某个盘整体扫了多大 | `system.full_scans[i].total_bytes` |
+| 盘里有哪些大目录 | `system.full_scans[i].dirs`（每项 `[path, depth, bytes, files]`） |
+| 盘里最大的文件 | `system.full_scans[i].big_files`（每项 `[bytes, path]`） |
+| 目录内容画像（树） | `system.full_scans[i].profiles`（见 3.3） |
+| 权限没读到的地方 | `system.full_scans[i].denied_summary` |
+| 用户目录速览 | `groups`（**不是** `--drive` 的结果） |
+
+> ⚠️ `groups` 永远是 C 盘用户目录，扫 E 盘时它不会变。
+> 别把"groups 里全是 C 盘"当成扫错盘——盘级数据只看 `full_scans`。
+
+每个数组的字段顺序都写在顶层 `schema` 里，**先读 schema 再写解析代码**，不要靠猜。
 
 ---
 
@@ -114,23 +146,54 @@ python scripts/server.py %TEMP%\storage_analysis.json
 - **文件**：只单列 `>= 100 MB` 的
 - 其余全部聚合进父目录字节数
 
-### 3.3 内容画像：这个目录里到底是什么
+### 3.3 内容画像：逐层下钻，看清里面到底是什么
 
-一个 12 GB 的目录叫"缓存"，里面可能是虚拟机镜像、模型权重，也可能是你的设计稿。
-**只看目录名就下结论一定会翻车。**
+一个 12 GB 的目录叫"缓存"，里面可能是虚拟机镜像、模型权重，也可能是你的设计稿；
+一个 200 GB 的"重装系统"文件夹，第一层可能只有三个子目录，真正的垃圾在第三层。
 
-`scan.py --full --profiles N` 会挑两类目录做画像：**体积最大的 N 个** +
-**自身文件占比最高的 N 个**（共约 2N 个）：
+**只看一层一定不够。** `scan.py` 输出的是**树**：
+
+```bash
+--drill 3          # 往下钻 3 层（默认 3，最大 5）
+--drill-min 512    # 小于 512 MB 的分支不钻
+--drill-branch 4   # 每个节点最多钻 4 个最大的子目录
+--drill-max 150    # 画像节点总数上限
+```
+
+**为什么默认 3 层：**
+
+- **1 层**：只能看到"这有几个子目录"，看不到子目录里是缓存还是镜像——对备份盘基本没用。
+- **3 层**：足够穿透"备份盘 → 年份目录 → 具体磁盘/系统目录"这种最常见结构，
+  也能看到 `U盘镜像\sources\install.wim` 这一级。
+- **更深**：收益递减，JSON 体积和扫描时间线性增长，再往下基本都是同类文件。
+
+**自动提前停**：某一层 85% 以上都是同一种类型（例如整层 mp4），再钻也是同类，直接停。
+但命中 `disk_clone` / `os_image_candidate` 的目录**会继续往下钻**——整盘备份里往往还套着缓存目录。
+
+每个节点给你这些字段：
 
 | 字段 | 含义 | 怎么用 |
 |---|---|---|
-| `own_bytes` / `subdir_bytes` | 体积是自己的文件撑的，还是子目录撑的 | own 高 → 看文件类型；sub 高 → 顺着 `top_subdirs` 往下钻 |
-| `ext` | 直接子文件扩展名直方图（类型 / 字节 / 个数） | `vhdx` `bin` `gguf` `mp4` 一眼看出是什么 |
-| `top_files` | 最大的 3 个直接文件 | 一个 `rootfs.vhdx 8.26 GB` 胜过千言万语 |
-| `top_subdirs` | 最大的 5 个直接子目录 | 继续下钻的入口 |
-| `stray_bytes` / `stray_ratio` | 混进来的文档/媒体/压缩包占比 | > 0.3 就要警惕：这不像纯缓存，按 🟡 处理 |
+| `own_bytes` / `subdir_bytes` | 体积是自己的文件撑的，还是子目录撑的 | own 高 → 看 `ext`；sub 高 → 看 `children` |
+| `kind` | video / image / audio / archive / disk_image / documents / code / app / model / mixed | 初判，**必须自己核实** |
+| `kind_share` | 主类型字节占比，< 0.5 就是 mixed | 判断"是不是纯缓存" |
+| `flags` | 见下表 | 直接决定处置口径 |
+| `ext` | `[扩展名, 字节, 个数]` | 看具体是什么文件 |
+| `top_files` | `[字节, 路径]` 最大的 3 个 | 一个 `rootfs.vhdx 8.26 GB` 胜过千言万语 |
+| `children` | 递归子节点，结构相同 | 继续展开 |
 
-**关键设计：画像只读一层，不递归。** 成本 O(直接子项数)，与目录多深无关。
+**flags 含义**
+
+| flag | 触发条件 | 意味着什么 |
+|---|---|---|
+| `disk_clone` | 一级子目录同时出现 ≥2 个 `Windows`/`Program Files`/`Users`/`ProgramData` | **另一块盘的完整拷贝** |
+| `drive_root_copy` | 顶层有 `$Recycle.Bin` / `System Volume Information` | 从某个盘根直接拷来的 |
+| `os_image_candidate` | 有 `sources` 或 `boot` 目录 | 可能是系统安装介质 |
+| `system_image` | 镜像类文件占比 ≥60% | 目录里主要是 ISO/WIM/VHD |
+| `cache_dir` | 目录名是 Cache/GPUCache/tmp/logs/node_modules 之类 | 大概率可再生 |
+
+**用法**：把命中的目录整棵树原样拷进 analysis.json 的 `tree` 字段，网页会渲染成可展开的层级。
+AI 自己要先读懂这棵树，再写 `content_profile`——不能把原始 JSON 丢给用户看。
 
 ### 3.4 工具探测与优先级
 
@@ -203,7 +266,7 @@ python scripts/detect_tools.py --json
 **做法：第一次扫描就带 `--elevate`。**
 
 ```bash
-python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan.json"
+python scripts/scan.py --full --elevate --profiles 10 --drill 3 --out "%TEMP%\storage_scan.json"
 ```
 
 `--elevate` 会：
@@ -228,6 +291,29 @@ python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan
 
 ---
 
+### 3.7 遇到"备份盘 / 整盘拷贝"怎么处理
+
+数据盘上很常见：`E:\01\重装系统`、`E:\旧电脑备份`、`E:\2023备份`——里面是**另一块盘的完整拷贝**，
+所以子目录动辄几十 GB，而且可能套好几层。
+
+**处理原则：照常扫描、照常分析、额外提示，删不删由用户决定。**
+
+- **不要因为识别出 `disk_clone` 就跳过这个目录。** 它照样要进画像、进分级、进报告。
+- **不要建议"按子目录挑着删"**——整盘备份拆开删就没有备份价值了。
+- 处置建议固定成三选一，并写清前置条件：
+  1. **整体保留**（还在用这台机器 / 还要重装）
+  2. **整体归档**（挪到外置盘或 NAS，再删本地）
+  3. **整体删除**（确认这台机器的系统已经不需要了）
+- `content_profile` 里要写清"里面是什么"，例如：
+  > 整盘备份：含 2023备份（内层又套 Windows/Users/Program Files，合计 156 GB）、
+  > U盘镜像（install.wim 7.3 GB）、驱动备份 18 GB。
+- `flags` 原样带进 analysis.json 的 `flags` 字段，网页会渲染成"整盘备份"红色徽章。
+
+**判断顺序**：先看 `flags` 有没有 `disk_clone`，再看 `children` 里是不是出现系统目录名。
+两个都有 → 基本可以确定是整盘拷贝，再判断是"这台机器的旧备份"还是"别人的盘"。
+
+---
+
 ## 4. 遇到不认识的路径
 
 按顺序，**不要跳步**：
@@ -242,6 +328,30 @@ python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan
    > 建议先 `<最小成本确认动作>`，确认前按 🟡 处理。
 
 禁止用"可能是/一般来说/应该是"包装成结论。
+
+---
+
+### 4.1 每个目录都必须给"是什么 + 怎么办"
+
+这个 skill 的目的不是列体积，是**用 AI 帮用户做判断**。所以每张 🟡/🔴 卡片必须有两段人话：
+
+| 字段 | 必须写什么 | 反例 |
+|---|---|---|
+| `content_profile` | 这是什么 + 关键数字：文件类型、数量、最大文件、来自哪个程序 | "缓存文件，可清理" |
+| `disposal` | 三选一 + 前置条件：保留 / 归档 / 删除，以及"什么时候可以删" | "请自行判断" |
+| `risk` | 删了会失去什么，能不能恢复 | "有风险" |
+
+**禁止**：
+- 只写"请自行判断""建议谨慎处理""根据需求决定"——这等于没分析。
+- 用"可能是 / 一般来说 / 应该是"包装猜测。
+
+**不确定时**：先本地取证（结构、修改时间、配置文件、占用进程、安装记录），
+再联网检索，再交叉验证。两者都拿不到结论，就明确写：
+
+> **未知**：目录结构是 `<看到的事实>`，没找到能确认它属于哪个程序的证据；
+> 建议先 `<最小成本确认动作>`，确认前按 🟡 处理。
+
+"未知"是合格答案，"编一个解释"不是。
 
 ---
 
@@ -274,7 +384,7 @@ python scripts/server.py %TEMP%\storage_analysis.json
 1. **磁盘总览**：容量 + 分段进度条（绿/橙/红/蓝）+ 三色 pill
 2. **占用排行 Top5**
 3. **执行建议**——**默认折叠**，点击展开（见 6.3）
-4. **🟢🟡🔴 折叠卡片**：名称 + 体积 + 展开箭头
+4. **🟢🟡🔴 折叠卡片**：名称 + 内容类型标签 + `disk_clone` 等徽章 + 体积 + 展开箭头；展开后是路径 / 内容画像 / **目录结构树**（按大小逐层下钻）/ 处置建议 / 预览按钮
 5. **未读取区域**：系统保留区（灰） / 权限不足（黄，可折叠）
 6. **长期优化建议**：分组卡片，带命令复制
 7. 右下角常驻 **■ 结束服务**

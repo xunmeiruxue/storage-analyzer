@@ -113,7 +113,7 @@ def load(src):
                 open_allow.add(rp)
 
     roots = [HOME, os.environ.get("TEMP") or "", os.environ.get("TMP") or ""]
-    for p in list(trash_allow):
+    for p in list(trash_allow) | set(open_allow):
         parts = os.path.normpath(p).split(os.sep)
         if len(parts) >= 2:
             roots.append(parts[0] + os.sep + parts[1])

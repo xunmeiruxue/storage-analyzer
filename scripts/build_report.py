@@ -14,7 +14,12 @@ Schema (all sections optional except system):
              disk_total, disk_used, disk_free, purgeable},
   "top5": [{rank, tier(green|yellow|red), size, type, name, path, note}],
   "green":  [{name, path, size_estimate, kill_processes:[], trash_paths:[...], commands:[{label,cmd}]}],
-  "yellow": [{name, path, size, content_profile, why_manual, disposal, risk, trash_paths:[...]?, open_note?}],
+  "yellow": [{name, path, size, content_profile, why_manual, disposal, risk,
+              kind?, flags?[], tree?[], trash_paths:[...]?, open_note?}],
+  # kind: video/image/audio/archive/disk_image/documents/code/app/model/mixed
+  # flags: disk_clone / os_image_candidate / drive_root_copy / cache_dir / system_image
+  # tree: [{path, bytes, kind, flags, children:[...]}]  递归目录树
+
   "red":    [{name, path, size, why_keep, indirect_release, auto_reclaim, app_paths:[...]?}],
   "denied": ["/path/one", ...]  或  {system:[], acl:[], other:[], is_admin:bool},
   # priority 支持字符串数组，或对象数组：

@@ -241,6 +241,22 @@
   .pv-note{color:var(--sub);font-size:12.5px;margin-top:8px}
   .pv-loading{color:var(--sub);font-size:14px;padding:20px 0;text-align:center}
   .pv-err{color:var(--red);font-size:14px}
+  /* 内容类型 / 备份标记 / 目录树 */
+  .kind{font-size:10.5px;padding:1px 7px;border-radius:999px;background:#eef0f3;color:var(--sub);font-weight:600}
+  .flag{font-size:10.5px;padding:1px 7px;border-radius:999px;font-weight:700}
+  .flag.f-disk_clone{background:#fff1e6;color:#d4380d}
+  .flag.f-os_image_candidate,.flag.f-system_image{background:var(--accent-bg);color:var(--accent)}
+  .flag.f-drive_root_copy{background:var(--yellow-bg);color:var(--yellow)}
+  .flag.f-cache_dir{background:var(--green-bg);color:var(--green)}
+  .tree{margin-top:6px;font-size:12.5px}
+  .tree .tree{margin-left:14px;border-left:1px dashed var(--line);padding-left:10px}
+  .tnode>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;padding:3px 0}
+  .tnode>summary::-webkit-details-marker{display:none}
+  .tnode>summary::before{content:"▸";color:var(--sub);font-size:10px}
+  .tnode[open]>summary::before{content:"▾"}
+  .tnode.leaf{display:flex;align-items:center;gap:6px;padding:3px 0 3px 14px}
+  .tname{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--ink)}
+  .tsize{margin-left:auto;color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -370,7 +386,7 @@ function renderGreen(items){
       : `<div class="field"><div class="label">清理前需关闭</div><span class="note">无需关闭任何进程</span></div>`;
     const cmds=(it.commands||[]).map(cmdBlock).join('');
     return card('green', it.name, it.size_estimate, it.path,
-      procs + `<div class="field"><div class="label">清理命令（自行确认后执行）</div>${cmds}</div>` + delBlock(it));
+      procs + `<div class="field"><div class="label">清理命令（自行确认后执行）</div>${cmds}</div>` + delBlock(it) + treeBlock(it), it);
   }).join('');
   return section('🟢 可自动清理（纯缓存/临时文件，可再生）', items.length, cards, greenBatchActions(items));
 }
@@ -586,7 +602,7 @@ function renderYellow(items){
     `<div class="field"><div class="label">内容画像</div>${esc(it.content_profile)}</div>
      <div class="field"><div class="label">为什么需要人工判断</div>${esc(it.why_manual)}</div>
      <div class="field"><div class="label">处置路径</div>${esc(it.disposal)}</div>
-     <div class="risk">⚠️ ${esc(it.risk)}</div>` + yellowActions(it))).join('');
+     <div class="risk">⚠️ ${esc(it.risk)}</div>` + yellowActions(it) + treeBlock(it), it)).join('');
   return section('🟡 需你参与的手动清理（含用户数据）', items.length, cards);
 }
 
@@ -615,7 +631,7 @@ function renderRed(items){
   const cards = items.map(it=>card('red', it.name, it.size||'', it.path,
     `<div class="field"><div class="label">为什么不建议手删</div>${esc(it.why_keep)}</div>
      <div class="field"><div class="label">卸载 / 释放建议</div>${esc(it.indirect_release)}</div>
-     ${it.auto_reclaim?`<div class="field"><div class="label">是否自动回收</div>${esc(it.auto_reclaim)}</div>`:''}` + redActions(it))).join('');
+     ${it.auto_reclaim?`<div class="field"><div class="label">是否自动回收</div>${esc(it.auto_reclaim)}</div>`:''}` + redActions(it) + treeBlock(it), it)).join('');
   return section('🔴 谨慎清理（建议走正规卸载，别手动拖删）', items.length, cards);
 }
 
@@ -632,20 +648,55 @@ function redActions(it){
   </div>`;
 }
 
-function card(tier,name,size,path,inner){
-  return `<div class="item ${tier}">
-    <div class="item-head" onclick="this.parentNode.classList.toggle('open')">
-      <span class="dot ${tier}"></span>
-      <span class="item-name">${esc(name)}</span>
-      <span class="item-badge"></span>
-      ${size?`<span class="item-size">${esc(cleanSize(size))}</span>`:''}
-      <span class="chev">▶</span>
-    </div>
-    <div class="item-body">
-      <div class="item-path">${esc(path)}</div>
-      ${inner}
-    </div></div>`;
+const KIND_LABEL = {video:'视频',image:'图片',audio:'音频',archive:'压缩包',disk_image:'镜像文件',
+  documents:'文档',code:'代码',app:'程序',model:'模型',mixed:'混合'};
+const FLAG_LABEL = {disk_clone:'整盘备份',os_image_candidate:'系统镜像',drive_root_copy:'盘根拷贝',
+  cache_dir:'缓存目录',system_image:'镜像文件'};
+
+function metaBadges(it){
+  let h = '';
+  if(it && it.kind && KIND_LABEL[it.kind]) h += '<span class="kind">' + KIND_LABEL[it.kind] + '</span>';
+  ((it && it.flags) || []).forEach(function(f){
+    if(FLAG_LABEL[f]) h += '<span class="flag f-' + f + '">' + FLAG_LABEL[f] + '</span>';
+  });
+  return h;
 }
+
+function treeBlock(it){
+  if(!it || !it.tree || !it.tree.length) return '';
+  return '<div class="field"><div class="label">目录结构（按大小逐层下钻）</div>' + renderTree(it.tree) + '</div>';
+}
+
+function renderTree(nodes, depth){
+  depth = depth || 0;
+  return '<div class="tree d' + depth + '">' + (nodes || []).map(function(n){
+    const name = n.name ? n.name : String(n.path || '').split(/[\\/]/).filter(Boolean).pop();
+    const kids = (n.children && n.children.length) ? renderTree(n.children, depth + 1) : '';
+    const line = '<span class="tname">' + esc(name) + '</span>' +
+      (n.kind && KIND_LABEL[n.kind] ? '<span class="kind">' + KIND_LABEL[n.kind] + '</span>' : '') +
+      (n.flags || []).map(function(f){ return FLAG_LABEL[f] ? '<span class="flag f-' + f + '">' + FLAG_LABEL[f] + '</span>' : ''; }).join('') +
+      '<span class="tsize">' + fmtBytes(n.bytes || 0) + '</span>';
+    if(kids) return '<details class="tnode"' + (depth < 1 ? ' open' : '') + '><summary>' + line + '</summary>' + kids + '</details>';
+    return '<div class="tnode leaf">' + line + '</div>';
+  }).join('') + '</div>';
+}
+
+function card(tier,name,size,path,inner,it){
+  return '<div class="item ' + tier + '">' +
+    '<div class="item-head" onclick="this.parentNode.classList.toggle(&#39;open&#39;)">' +
+      '<span class="dot ' + tier + '"></span>' +
+      '<span class="item-name">' + esc(name) + '</span>' +
+      metaBadges(it) +
+      '<span class="item-badge"></span>' +
+      (size ? '<span class="item-size">' + esc(cleanSize(size)) + '</span>' : '') +
+      '<span class="chev">▶</span>' +
+    '</div>' +
+    '<div class="item-body">' +
+      '<div class="item-path">' + esc(path) + '</div>' +
+      inner +
+    '</div></div>';
+}
+
 function section(title,count,inner,actions){
   return `<div class="sec"><h2>${esc(title)} <span class="count">${count} 项</span>${actions||''}</h2>${inner}</div>`;
 }
