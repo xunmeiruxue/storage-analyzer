@@ -39,7 +39,7 @@ def main():
     out = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser(
         "~/Desktop/storage-report.html")
 
-    with open(src, "r", encoding="utf-8") as f:
+    with open(src, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     with open(TEMPLATE, "r", encoding="utf-8") as f:
         tpl = f.read()

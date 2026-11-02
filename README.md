@@ -33,7 +33,7 @@ Windows 磁盘空间分析 + 交互式一键清理报告。
 ```powershell
 cd <仓库目录>
 python scripts\detect_tools.py --json
-python scripts\scan.py --full --elevate --profiles 10 > %TEMP%\storage_scan.json
+python scripts\scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan.json"
 python scripts\server.py %TEMP%\storage_analysis.json
 ```
 
@@ -48,7 +48,7 @@ cmd.exe /c "where python"
 
 # 用它跑扫描（路径用 Windows 写法）
 /mnt/c/Users/<USER>/AppData/Local/Programs/Python/Python312/python.exe \
-    scripts/scan.py --full --elevate > /mnt/c/Users/<USER>/AppData/Local/Temp/storage_scan.json
+    scripts/scan.py --full --elevate --out "C:\\Users\\<USER>\\AppData\\Local\\Temp\\storage_scan.json"
 ```
 
 注意：**服务端必须在 Windows 侧运行**，因为它要调用 `SHFileOperationW` 把文件送进回收站。

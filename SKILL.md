@@ -66,7 +66,7 @@ description: >
 python scripts/detect_tools.py --json
 
 # 1) 扫描。建议第一次就带 --elevate，让用户点一次 UAC，后面不再为权限发愁
-python scripts/scan.py --full --elevate --profiles 10 > %TEMP%\storage_scan.json
+python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan.json"
 
 #    只扫系统盘（默认） / 指定盘 / 全部盘
 python scripts/scan.py --full
@@ -203,7 +203,7 @@ python scripts/detect_tools.py --json
 **做法：第一次扫描就带 `--elevate`。**
 
 ```bash
-python scripts/scan.py --full --elevate --profiles 10 > %TEMP%\storage_scan.json
+python scripts/scan.py --full --elevate --profiles 10 --out "%TEMP%\storage_scan.json"
 ```
 
 `--elevate` 会：
@@ -451,6 +451,21 @@ GET  /progress?id=xxx&token=... →
 结束时用页面按钮。
 
 ---
+
+### 8.10 调用层的三个坑（脚本本身没问题，别踩）
+
+1. **不要用 `python -c` 内联含反斜杠的脚本/路径。** PowerShell 的 here-string
+   （`@"..."@`）经多层传参会吞掉引号和反斜杠，Python 收到的是非法转义。
+   改用：写成临时 `.py` 文件执行，或者直接把参数传给脚本（脚本自带参数）。
+2. **不要依赖 `%TEMP%` 之类的环境变量展开。** 不同进程环境不一样，
+   `os.path.expandvars` 可能拿不到。用 `--out` 显式传绝对路径，
+   或 `tempfile.gettempdir()`。
+3. **不要用 shell 重定向（`>`）生成 JSON。** PowerShell 5.1 的 `>` 走 `Out-File`，
+   会写成 UTF-16LE 或带 BOM 的 UTF-8，下游 `json.load` 直接报
+   `Unexpected UTF-8 BOM`。**用 `scan.py --out <文件>`**，Python 自己写，保证 UTF-8 无 BOM。
+   （即使拿到带 BOM 的 JSON，`server.py` / `build_report.py` 也已用 `utf-8-sig` 读取，不会崩。）
+
+> 这三条都是「调用方式」问题，不是 skill 脚本问题。遇到时先检查调用层，别去改脚本。
 
 ## 9. 对话摘要
 

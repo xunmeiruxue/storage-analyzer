@@ -89,7 +89,7 @@ def _norm(p):
 
 
 def load(src):
-    with open(src, encoding="utf-8") as f:
+    with open(src, encoding="utf-8-sig") as f:
         data = json.load(f)
     with open(TEMPLATE, encoding="utf-8") as f:
         tpl = f.read()
@@ -329,7 +329,7 @@ def _denied(rp):
     return None
 
 
-def check_path(p, allow):
+def check_path(p, allow, mode=None):
     rp = _norm(p)
     if rp not in allow:
         return None, "path not in allowlist: %s" % p
@@ -338,8 +338,11 @@ def check_path(p, allow):
     why = _denied(rp)
     if why:
         return None, "protected system path (%s), refused: %s" % (why, p)
-    if not any(rp == base or rp.startswith(base + os.sep) for base in ROOTS):
-        return None, "path outside declared roots: %s" % p
+    # open 只是打开资源管理器，非破坏性，不应受清理根限制，
+    # 否则黄色卡片（本身没有 trash_paths）会打不开文件夹。
+    if mode != "open":
+        if not any(rp == base or rp.startswith(base + os.sep) for base in ROOTS):
+            return None, "path outside declared roots: %s" % p
     return rp, None
 
 class Handler(BaseHTTPRequestHandler):
@@ -448,7 +451,7 @@ class Handler(BaseHTTPRequestHandler):
         paths = req.get("paths") or []
         # 先整单预校验：任何一个路径不合法就整单拒绝，避免删到一半才报错
         for p in paths:
-            rp, err = check_path(p, allow)
+            rp, err = check_path(p, allow, mode)
             if err:
                 self._send(403, json.dumps({"ok": False, "error": err, "done": []},
                                            ensure_ascii=False))
