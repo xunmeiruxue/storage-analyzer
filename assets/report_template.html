@@ -447,14 +447,22 @@ function doBatch(btn, mode){
 function delBlock(it){
   if(!DELETE || !it.trash_paths || !it.trash_paths.length) return '';
   const payload = btoa(unescape(encodeURIComponent(JSON.stringify(it.trash_paths))));
-  return '<div class="field del-actions" data-paths="' + payload + '">' +
+  // 打开文件夹的候选：先试卡片展示路径（若是绝对路径），再逐个试清理路径；
+  // 服务端只会打开第一个真实存在的，避免弹一堆窗口。
+  const openCandidates = [];
+  if(/^[A-Za-z]:[\\/]/.test(it.path || '')) openCandidates.push(it.path);
+  it.trash_paths.forEach(function(p){ openCandidates.push(p); });
+  const openPayload = btoa(unescape(encodeURIComponent(JSON.stringify(openCandidates))));
+  return '<div class="field del-actions" data-paths="' + payload + '" data-open="' + openPayload + '">' +
     '<div class="label">在网页上直接处理（' + it.trash_paths.length + ' 个路径）</div>' +
     '<div class="del-row">' +
+      '<button class="del-btn open" onclick="doOpen(this)">在资源管理器里打开</button>' +
       '<button class="del-btn trash" onclick="doDelete(this,&#39;trash&#39;)">移到废纸篓</button>' +
       '<button class="del-btn danger" onclick="doDelete(this,&#39;rm&#39;)">直接删除</button>' +
       '<span class="del-status"></span>' +
     '</div>' +
-    '<div class="del-note"><b>移到废纸篓</b>：可逆，删错能从' + FM + '废纸篓捞回，但要清空废纸篓才真正释放空间。' +
+    '<div class="del-note"><b>在资源管理器里打开</b>：只跳过去看，不删任何东西。' +
+    '<b>移到废纸篓</b>：可逆，删错能从' + FM + '废纸篓捞回，但要清空废纸篓才真正释放空间。' +
     '<b>直接删除</b>：立即释放、不可恢复。绿灯都是可再生缓存，删了会自动重建。' +
     '某一项被占用导致失败时会自动跳过，继续处理其余项。</div>' +
   '</div>';

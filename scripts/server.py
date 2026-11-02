@@ -98,6 +98,11 @@ def load(src):
         for p in (it.get("trash_paths") or []):
             rp = _norm(p)
             rm_allow.add(rp); trash_allow.add(rp); open_allow.add(rp)
+        # 绿灯卡片的展示路径（比如 C:\tmp）也允许"打开文件夹"
+        if it.get("path"):
+            rp = _norm(it["path"])
+            if os.path.exists(rp):
+                open_allow.add(rp)
     for it in data.get("yellow", []):
         for p in (it.get("trash_paths") or []):
             rp = _norm(p)
@@ -113,7 +118,7 @@ def load(src):
                 open_allow.add(rp)
 
     roots = [HOME, os.environ.get("TEMP") or "", os.environ.get("TMP") or ""]
-    for p in list(trash_allow) | set(open_allow):
+    for p in set(trash_allow) | set(open_allow):
         parts = os.path.normpath(p).split(os.sep)
         if len(parts) >= 2:
             roots.append(parts[0] + os.sep + parts[1])
@@ -481,7 +486,16 @@ def _run_job(job_id, paths, mode, stop_on_error):
         try:
             rp = _norm(p)
             if mode == "open":
+                # 打开文件夹只开一个：优先第一个真实存在的路径，避免弹一堆窗口
+                if not os.path.exists(rp):
+                    job["done"] = list(done)
+                    job["failed"] = list(failed)
+                    continue
                 open_in_file_manager(rp)
+                done.append(p)
+                job["done"] = list(done)
+                job["failed"] = list(failed)
+                break
             elif not os.path.exists(rp):
                 pass
             elif mode == "trash":
